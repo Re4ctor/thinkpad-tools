@@ -10,4 +10,4 @@ StandardOutput=syslog
 StandardError=syslog
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=ThinkpadTools.service

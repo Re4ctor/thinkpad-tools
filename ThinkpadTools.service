@@ -1,10 +1,14 @@
 [Unit]
 Description=Thinkpad Tools
-After=multi-user.target
+After=ThinkpadThrottleFix.service
 
 [Service]
 Type=idle
 ExecStart=/opt/ThinkpadTools/venv/bin/python3 /opt/ThinkpadTools/service_runner.py
+# Setting PYTHONUNBUFFERED is necessary to see the output of this service in the journal
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=syslog
+StandardError=syslog
 
 [Install]
 WantedBy=multi-user.target
