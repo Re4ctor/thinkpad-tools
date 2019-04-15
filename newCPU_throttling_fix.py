@@ -10,6 +10,8 @@ import re
 import struct
 import subprocess
 import sys
+import argparse
+import configparser
 
 from collections import defaultdict
 from dbus.mainloop.glib import DBusGMainLoop
@@ -171,7 +173,7 @@ def get_value_for_bits(val, from_bit=0, to_bit=63):
 
 def is_on_battery(config):
     try:
-        for path in glob.glob(config.get('GENERAL', 'Sysfs_Power_Path', fallback=DEFAULT_SYSFS_POWER_PATH)):
+        for path in glob.glob(config.get('THROTTLED_GENERAL', 'Sysfs_Power_Path', fallback=DEFAULT_SYSFS_POWER_PATH)):
             with open(path) as f:
                 return not bool(int(f.read()))
         raise
@@ -363,7 +365,7 @@ def load_config():
     config.read(args.config)
 
     # config values sanity check
-    for power_source in ('AC', 'BATTERY'):
+    for power_source in ('THROTTLED_AC', 'THROTTLED_BATTERY'):
         for option in ('Update_Rate_s', 'PL1_Tdp_W', 'PL1_Duration_s', 'PL2_Tdp_W', 'PL2_Duration_S'):
             value = config.getfloat(power_source, option, fallback=None)
             if value is not None:
@@ -429,7 +431,7 @@ def load_config():
 
 def calc_reg_values(platform_info, config):
     regs = defaultdict(dict)
-    for power_source in ('AC', 'BATTERY'):
+    for power_source in ('THROTTLED_AC', 'THROTTLED_BATTERY'):
         if platform_info['feature_programmable_temperature_target'] != 1:
             warning("Setting temperature target is not supported by this CPU")
         else:
@@ -532,7 +534,7 @@ def power_thread(config, regs, exit_event):
 
         # switch back to sysfs polling
         if power['method'] == 'polling':
-            power['source'] = 'BATTERY' if is_on_battery(config) else 'AC'
+            power['source'] = 'THROTTLED_BATTERY' if is_on_battery(config) else 'THROTTLED_AC'
 
         # set temperature trip point
         if 'MSR_TEMPERATURE_TARGET' in regs[power['source']]:
@@ -584,13 +586,13 @@ def power_thread(config, regs, exit_event):
             )
 
         wait_t = config.getfloat(power['source'], 'Update_Rate_s')
-        enable_hwp_mode = config.getboolean('AC', 'HWP_Mode', fallback=False)
-        if power['source'] == 'AC' and enable_hwp_mode:
+        enable_hwp_mode = config.getboolean('THROTTLED_AC', 'HWP_Mode', fallback=False)
+        if power['source'] == 'THROTTLED_AC' and enable_hwp_mode:
             cpu_usage = cpu_usage_pct(exit_event, interval=wait_t)
             # set full performance mode only when load is greater than this threshold (~ at least 1 core full speed)
             performance_mode = cpu_usage > 100.0 / (cpu_count() * 1.25)
             # check again if we are on AC, since in the meantime we might have switched to BATTERY
-            if (power['method'] == 'dbus' and power['source'] == 'AC') or (power['method'] == 'polling' and not is_on_battery(config)):
+            if (power['method'] == 'dbus' and power['source'] == 'THROTTLED_AC') or (power['method'] == 'polling' and not is_on_battery(config)):
                 set_hwp('performance' if performance_mode else 'balance_performance')
         else:
             exit_event.wait(wait_t)
@@ -717,7 +719,7 @@ def main():
         nargs='?',
         help='realtime monitoring of throttling causes (default 1s)',
     )
-    parser.add_argument('--config', default='/etc/lenovo_fix.conf', help='override default config file path')
+    parser.add_argument('--config', default='config.ini', help='override default config file path')
     parser.add_argument('--force', action='store_true', help='bypass compatibility checks (EXPERTS only)')
     args = parser.parse_args()
 
@@ -727,7 +729,7 @@ def main():
 
     print('[I] Loading config file.')
     config = load_config()
-    power['source'] = 'BATTERY' if is_on_battery(config) else 'AC'
+    power['source'] = 'THROTTLED_BATTERY' if is_on_battery(config) else 'THROTTLED_AC'
 
     platform_info = get_cpu_platform_info()
     if args.debug:
@@ -735,7 +737,7 @@ def main():
             print('[D] cpu platform info: {} = {}'.format(key.replace("_", " "), value))
     regs = calc_reg_values(platform_info, config)
 
-    if not config.getboolean('GENERAL', 'Enabled'):
+    if not config.getboolean('THROTTLED_GENERAL', 'Enabled'):
         return
 
     exit_event = Event()
@@ -754,7 +756,7 @@ def main():
 
     def handle_ac_callback(*args):
         try:
-            power['source'] = 'BATTERY' if args[1]['Online'] == 0 else 'AC'
+            power['source'] = 'THROTTLED_BATTERY' if args[1]['Online'] == 0 else 'THROTTLED_AC'
             power['method'] = 'dbus'
         except:
             power['method'] = 'polling'

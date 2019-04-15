@@ -5,7 +5,7 @@ import Handlers
 import configparser
 
 config = configparser.ConfigParser()
-config.read('/etc/thinkpad_tools/config.ini')
+config.read('config.ini')
 
 trackpoint_sensitivity = config['TRACKPOINT']['SENSITIVITY']
 trackpoint_speed = config['TRACKPOINT']['SPEED']
