@@ -176,9 +176,8 @@ def is_on_battery(config):
         for path in glob.glob(config.get('THROTTLED_GENERAL', 'Sysfs_Power_Path', fallback=DEFAULT_SYSFS_POWER_PATH)):
             with open(path) as f:
                 return not bool(int(f.read()))
-        raise
     except:
-        warning('No valid Sysfs_Power_Path found! Trying upower method #1')
+        raise warning('No valid Sysfs_Power_Path found! Trying upower method #1')
     try:
         out = subprocess.check_output(('upower', '-i', '/org/freedesktop/UPower/devices/line_power_AC'))
         res = re.search(rb'online:\s+(yes|no)', out).group(1).decode().strip()
@@ -186,9 +185,8 @@ def is_on_battery(config):
             return False
         elif res == 'no':
             return True
-        raise
     except:
-        warning('Trying upower method #2')
+        raise warning('Trying upower method #2')
     try:
         out = subprocess.check_output(('upower', '-i', '/org/freedesktop/UPower/devices/battery_BAT0'))
         res = re.search(rb'state:\s+(.+)', out).group(1).decode().strip()
@@ -259,55 +257,6 @@ def calc_time_window_vars(t):
             if t <= (2 ** Y) * (1.0 + Z / 4.0) * time_unit:
                 return (Y, Z)
     raise ValueError('Unable to find a good combination!')
-
-
-def calc_undervolt_msr(plane, offset):
-    """Return the value to be written in the MSR 150h for setting the given
-    offset voltage (in mV) to the given voltage plane.
-    """
-    assert offset <= 0
-    assert plane in VOLTAGE_PLANES
-    offset = int(round(offset * 1.024))
-    offset = 0xFFE00000 & ((offset & 0xFFF) << 21)
-    return 0x8000001100000000 | (VOLTAGE_PLANES[plane] << 40) | offset
-
-
-def calc_undervolt_mv(msr_value):
-    """Return the offset voltage (in mV) from the given raw MSR 150h value.
-    """
-    offset = (msr_value & 0xFFE00000) >> 21
-    offset = offset if offset <= 0x400 else -(0x800 - offset)
-    return int(round(offset / 1.024))
-
-
-def get_undervolt(plane=None, convert=False):
-    planes = [plane] if plane in VOLTAGE_PLANES else VOLTAGE_PLANES
-    out = {}
-    for plane in planes:
-        writemsr(0x150, 0x8000001000000000 | (VOLTAGE_PLANES[plane] << 40))
-        read_value = readmsr(0x150, flatten=True) & 0xFFFFFFFF
-        out[plane] = calc_undervolt_mv(read_value) if convert else read_value
-
-    return out
-
-
-def undervolt(config):
-    for plane in VOLTAGE_PLANES:
-        write_offset_mv = config.getfloat(
-            'UNDERVOLT.{:s}'.format(power['source']), plane, fallback=config.getfloat('UNDERVOLT', plane, fallback=0.0)
-        )
-        write_value = calc_undervolt_msr(plane, write_offset_mv)
-        writemsr(0x150, write_value)
-        if args.debug:
-            write_value &= 0xFFFFFFFF
-            read_value = get_undervolt(plane)[plane]
-            read_offset_mv = calc_undervolt_mv(read_value)
-            match = OK if write_value == read_value else ERR
-            print(
-                '[D] Undervolt plane {:s} - write {:.0f} mV ({:#x}) - read {:.0f} mV ({:#x}) - match {}'.format(
-                    plane, write_offset_mv, write_value, read_offset_mv, read_value, match
-                )
-            )
 
 
 def calc_icc_max_msr(plane, current):
@@ -384,29 +333,6 @@ def load_config():
                     )
                 )
 
-    # fix any invalid value (ie. > 0) in the undervolt settings
-    for key in UNDERVOLT_KEYS:
-        for plane in VOLTAGE_PLANES:
-            if key in config:
-                value = config.getfloat(key, plane)
-                valid_value = min(0, value)
-                if value != valid_value:
-                    config.set(key, plane, str(valid_value))
-                    print(
-                        '[!] Overriding invalid "{:s}" value in "{:s}" voltage plane: {:.0f} -> {:.0f}'.format(
-                            key, plane, value, valid_value
-                        )
-                    )
-
-    # handle the case where only one of UNDERVOLT.AC, UNDERVOLT.BATTERY keys exists
-    # by forcing the other key to all zeros (ie. no undervolt)
-    if any(key in config for key in UNDERVOLT_KEYS[1:]):
-        for key in UNDERVOLT_KEYS[1:]:
-            if key not in config:
-                config.add_section(key)
-            for plane in VOLTAGE_PLANES:
-                value = config.getfloat(key, plane, fallback=0.0)
-                config.set(key, plane, str(value))
 
     iccmax_enabled = False
     # check for invalid values (ie. <= 0 or > 0x3FF) in the IccMax settings
@@ -675,10 +601,6 @@ def monitor(exit_event, wait):
         'DRAM': (readmsr(MSR_DRAM_ENERGY_STATUS, cpu=0) * rapl_power_unit, time()),
     }
 
-    undervolt_values = get_undervolt(convert=True)
-    undervolt_output = ' | '.join('{:s}: {:.2f} mV'.format(plane, undervolt_values[plane]) for plane in VOLTAGE_PLANES)
-    print('[D] Undervolt offsets: {:s}'.format(undervolt_output))
-
     iccmax_values = get_icc_max(convert=True)
     iccmax_output = ' | '.join('{:s}: {:.2f} A'.format(plane, iccmax_values[plane]) for plane in CURRENT_PLANES)
     print('[D] IccMax: {:s}'.format(iccmax_output))
@@ -745,14 +667,6 @@ def main():
     thread.daemon = True
     thread.start()
 
-    undervolt(config)
-    set_icc_max(config)
-
-    # handle dbus events for applying undervolt/IccMax on resume from sleep/hybernate
-    def handle_sleep_callback(sleeping):
-        if not sleeping:
-            undervolt(config)
-            set_icc_max(config)
 
     def handle_ac_callback(*args):
         try:
@@ -762,21 +676,6 @@ def main():
             power['method'] = 'polling'
 
     DBusGMainLoop(set_as_default=True)
-    bus = dbus.SystemBus()
-
-    # add dbus receiver only if undervolt/IccMax is enabled in config
-    if any(
-        config.getfloat(key, plane, fallback=0) != 0 for plane in VOLTAGE_PLANES for key in UNDERVOLT_KEYS + ICCMAX_KEYS
-    ):
-        bus.add_signal_receiver(
-            handle_sleep_callback, 'PrepareForSleep', 'org.freedesktop.login1.Manager', 'org.freedesktop.login1'
-        )
-    bus.add_signal_receiver(
-        handle_ac_callback,
-        signal_name="PropertiesChanged",
-        dbus_interface="org.freedesktop.DBus.Properties",
-        path="/org/freedesktop/UPower/devices/line_power_AC",
-    )
 
     print('[I] Starting main loop.')
 
