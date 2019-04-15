@@ -4,8 +4,7 @@ After=multi-user.target
 
 [Service]
 Type=idle
-ExecStart=/usr/bin/python /usr/lib/ThinkpadTools/service_runner.py
-ExecReload=/usr/bin/python /usr/lib/ThinkpadTools/service_runner.py
+ExecStart=/opt/ThinkpadTools/venv/bin/python3 /opt/ThinkpadTools/service_runner.py
 
 [Install]
 WantedBy=multi-user.target

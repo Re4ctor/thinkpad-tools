@@ -1,38 +1,35 @@
-#!/bin/bash
-# exit when any command fails
+
+#!/bin/sh
+
+systemctl stop ThinkpadThrottleFix.service
+systemctl stop ThinkpadTools.service
+
+mkdir -p "/opt/ThinkpadTools"
 set -e
 
-# keep track of the last executed command
-trap 'last_command=$current_command; current_command=$BASH_COMMAND' DEBUG
-# echo an error message before exiting
-trap 'echo "\"${last_command}\" command filed with exit code $?."' EXIT
+cd "$HOME"
 
-if [[ $EUID -ne 0 ]]; then
-   echo "Setup must be run as root" 
-   exit 1
+echo "Copying config file..."
+if [ ! -f /opt/ThinkpadTools/config.ini ]; then
+	cp config.ini /opt/ThinkpadTools/
+else
+	echo "Config file already exists, skipping."
 fi
 
+echo "Copying systemd service file..."
+cp ThinkpadThrottleFix.service /etc/systemd/system/
+cp ThinkpadTools.service /etc/systemd/system/
 
-echo "Copying stock configuration file..." 
-# cp config.ini /etc/thinkpad_tools
+echo "Building virtualenv..."
+cp -n requirements.txt Handlers.py mmio.py newCPU_throttling_fix.py service_runner.py "/opt/ThinkpadTools/"
+cd "/opt/ThinkpadTools"
+/usr/bin/python3 -m venv venv
+. venv/bin/activate
+pip install -r requirements.txt
 
-echo "Configuration located at /etc/thinkpad_tools/config.ini"
-echo ""
-echo "Copying handlers and libraries..."
-#mkdir /usr/lib/ThinkpadTools/
-cp Handlers.py /usr/lib/ThinkpadTools/
-cp Handlers.py /usr/lib/
-echo "Finished copying handlers and libraries"
-echo ""
-echo "Copying startup unit files..."
-cp ThinkpadTools.service /lib/systemd/system/
-cp service_runner.py /usr/lib/ThinkpadTools/
-echo "Copying binaries..."
-cp thinkpad-tools.py /usr/bin/
-chmod +x /usr/bin/thinkpad-tools.py
-echo "Configuring Service..."
+echo "Enabling and starting service..."
 systemctl daemon-reload
-systemctl enable ThinkpadTools.service
-echo "Starting Service..."
-systemctl start ThinkpadTools.service
-echo "Done!"
+systemctl enable ThinkpadTools.service && systemctl restart ThinkpadTools.service
+systemctl enable ThinkpadThrottleFix.service && systemctl restart ThinkpadThrottleFix.service
+
+echo "All done."

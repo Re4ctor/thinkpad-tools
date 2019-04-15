@@ -667,14 +667,6 @@ def main():
     thread.daemon = True
     thread.start()
 
-
-    def handle_ac_callback(*args):
-        try:
-            power['source'] = 'THROTTLED_BATTERY' if args[1]['Online'] == 0 else 'THROTTLED_AC'
-            power['method'] = 'dbus'
-        except:
-            power['method'] = 'polling'
-
     DBusGMainLoop(set_as_default=True)
 
     print('[I] Starting main loop.')
